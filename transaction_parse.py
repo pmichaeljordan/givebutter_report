@@ -1,13 +1,22 @@
 import pandas as pd
+import os
+import glob
 import time
 
 #!/usr/bin/env python3
+
+''' Export transactions with detail from Givegbutter. Include all fields. Parser will drop any uncessary fields.
+    Create a mapper file for any tickets that were paid for someone other than the rider as csv with the following columns:
+    1. Name Team member (must match)
+    2. email address from Team member (Will replace the incorrect email address)
+    '''
 
 # Load the CSV file into a DataFrame
 file_path = 'transactions.csv'
 df = pd.read_csv(file_path)
 
 # Change any column data that matches '2024 Ride for Missing Children - MV New and Returning Riders' to '2024 Ride for Missing Children - MV New / Returning Riders'
+# This was due to testing tickets before going live. Don't do this next year. Also use shorter ticket names.
 df['Description'] = df['Description'].replace('2024 Ride for Missing Children - MV New and Returning Riders', '2024 Ride for Missing Children - MV New / Returning Riders')
 
 # Filter out the rows where Subtype is 'ticket'
@@ -71,6 +80,50 @@ def auto_adjust_columns_width(df, writer, sheet_name):
         col_idx = df.columns.get_loc(column)
         # Adjust the column width at the column index
         writer.sheets[sheet_name].set_column(col_idx, col_idx, column_length)
+
+# Assuming the directory structure and file naming convention
+output_dir = 'Rider_Volunteer_CSVs'
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+
+# Function to save DataFrame to CSV and compare with the previous version
+def save_and_compare_df(df, description):
+    # Filename convention: Description_CurrentTime.csv
+    filename = f"{description.replace(' ', '_')}_{int(time.time())}.csv"
+    filepath = os.path.join(output_dir, filename)
+    
+    # Save current DataFrame to CSV
+    df.to_csv(filepath, index=False)
+    
+    # Find previous file for the same description
+    previous_files = glob.glob(os.path.join(output_dir, f"{description.replace(' ', '_')}*.csv"))
+    previous_files = [f for f in previous_files if f != filepath]  # Exclude current file
+    
+    if previous_files:
+        # Assuming there's only one previous file for simplicity
+        previous_file = max(previous_files, key=os.path.getctime)  # Get the most recent file
+        previous_df = pd.read_csv(previous_file)
+        
+        # Compare DataFrames to find new rows in the current DataFrame
+        # This simplistic comparison assumes you're only looking for new rows added
+        comparison_df = pd.concat([df, previous_df, previous_df]).drop_duplicates(keep=False)
+        
+        if not comparison_df.empty:
+            changes_filename = f"changes_{filename}"
+            changes_filepath = os.path.join(output_dir, changes_filename)
+            comparison_df.to_csv(changes_filepath, index=False)
+            print(f"Changes saved to {changes_filepath}")
+        else:
+            print("No changes detected.")
+    else:
+        print(f"No previous files found for {description}. Current file saved as {filename}.")
+
+for original_desc, new_sheet_name in description_to_sheet_map.items():
+    # Filter the DataFrame based on the Description
+    subset_df = tickets_df[tickets_df['Description'] == original_desc]
+    
+    # Save and compare the subset DataFrame
+    save_and_compare_df(subset_df, new_sheet_name)
 
 # Get the current epoch time
 current_time = int(time.time())
