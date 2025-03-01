@@ -109,8 +109,20 @@ writer.close()
 print(f"Workbook saved to {output_path}")
 
 def process_mv_sheets():
+    import pandas as pd
 
-    # Define the Google Contacts template columns in order
+    # --- Read the mapping file ---
+    mapping_file = "data_map.txt"
+    try:
+        # Expecting a CSV with two columns: the first column is the incorrect value, 
+        # and the second is the correct value.
+        mapping_df = pd.read_csv(mapping_file, header=None, names=["Incorrect", "Correct"])
+        mapping_dict = mapping_df.set_index("Incorrect")["Correct"].to_dict()
+    except Exception as e:
+        # If the mapping file cannot be read, proceed with an empty mapping.
+        mapping_dict = {}
+
+    # --- Define Google Contacts header template ---
     google_columns = [
         'Name Prefix',
         'First Name',
@@ -150,48 +162,57 @@ def process_mv_sheets():
         'Labels'
     ]
 
-    # Read the Excel file
-    file_path = output_path  # ensure output_path is defined elsewhere in your script
+    # --- Read the Excel file ---
+    file_path = output_path  # Ensure output_path is defined elsewhere in your script
     xl = pd.ExcelFile(file_path)
 
-    # Extract sheet names that start with "MV"
+    # Extract sheets that start with "MV"
     mv_sheets = [sheet for sheet in xl.sheet_names if sheet.startswith('MV')]
     all_rows = []
 
     for sheet in mv_sheets:
         df = xl.parse(sheet)
 
-        # Create a copy of the DataFrame with the base columns
+        # Copy the base columns from the sheet
         data = df[['First Name', 'Last Name', 'Email']].copy()
 
-        # Add Phone column if it exists; otherwise, use empty strings
+        # Add Phone column if available; otherwise, use an empty string
         if 'Phone' in df.columns:
             data['Phone'] = df['Phone']
         else:
             data['Phone'] = ''
 
-        # Add Tag column based on the sheet name
+        # Set the Tag column based on the sheet name
         if sheet == 'MV Volunteer':
             data['Tag'] = '2025_Volunteer'
         else:
             data['Tag'] = '2025_Rider'
 
-        # For each row, create a new dictionary matching the Google Contacts columns
+        # Process each row and apply mapping corrections to each relevant field.
         for _, row in data.iterrows():
-            contact = {col: "" for col in google_columns}
-            contact["First Name"] = row["First Name"]
-            contact["Last Name"] = row["Last Name"]
-            contact["E-mail 1 - Value"] = row["Email"]
-            contact["Phone 1 - Value"] = row["Phone"]
-            contact["Labels"] = row["Tag"]
+            # Apply mapping correction to each field if a correction exists.
+            first_name = mapping_dict.get(row["First Name"], row["First Name"]).title()
+            last_name  = mapping_dict.get(row["Last Name"], row["Last Name"]).title()
+            email      = mapping_dict.get(row["Email"], row["Email"])
+            phone      = mapping_dict.get(row["Phone"], row["Phone"])
+            tag        = mapping_dict.get(row["Tag"], row["Tag"])
 
-            # Optionally, set default labels for email and phone
+            # Build the contact dictionary according to the Google Contacts format.
+            contact = {col: "" for col in google_columns}
+            contact["First Name"] = first_name
+            contact["Last Name"] = last_name
+            contact["E-mail 1 - Value"] = email
+            contact["Phone 1 - Value"] = phone
+            contact["Labels"] = tag
+
+            # Optionally, set default labels for email and phone.
             contact["E-mail 1 - Label"] = "Email"
             contact["Phone 1 - Label"] = "Phone"
 
             all_rows.append(contact)
 
-    # Create a final DataFrame with the Google Contacts header order
+    # Create a final DataFrame with the Google Contacts header order and write to CSV.
     final_df = pd.DataFrame(all_rows, columns=google_columns)
     final_df.to_csv('output.csv', index=False, header=True)
+
 process_mv_sheets()
