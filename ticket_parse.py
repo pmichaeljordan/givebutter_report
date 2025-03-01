@@ -3,6 +3,7 @@ import pandas as pd
 import glob
 import os
 import re
+from datetime import datetime
 
 def find_latest_csv(prefix='tickets-', directory='.'):
     files = glob.glob(os.path.join(directory, f"{prefix}*.csv"))
@@ -26,6 +27,21 @@ data = pd.read_csv(
     encoding="utf-8-sig",  # BOM-safe
     # engine="python",     # Uncomment if you have parsing errors with the default engine
 )
+cols_to_drop = [
+    'Ticket Suffix',
+    'Campaign Code',
+    'Campaign Title',
+    'Price',
+    'Check In',
+    'Promo Code',
+    'Checked in by',
+    'Checkin type',
+    'Checkin source',
+    'Check-in Date (UTC)',
+    'Bundled',
+    'Bundle Type'
+]
+data.drop(columns=cols_to_drop, errors='ignore', inplace=True)
 print("Data shape (rows, cols):", data.shape)
 print("Columns found:")
 for c in data.columns:
@@ -46,7 +62,8 @@ if 'Ticket Type' not in data.columns:
 ticket_types = data['Ticket Type'].unique()
 print("Unique ticket types:", ticket_types)
 
-output_path = './parsed_tickets.xlsx'
+date_str = datetime.now().strftime("%m-%d-%Y")
+output_path = f"./parsed_tickets_{date_str}.xlsx"
 writer = pd.ExcelWriter(output_path, engine='xlsxwriter')
 
 def clean_sheet_name(ticket_type):
@@ -59,6 +76,7 @@ def clean_sheet_name(ticket_type):
     
     # 2) Remove (or replace) invalid Excel characters
     # Excel disallows: []:*?/\
+    new_name = re.sub(r' / ', ' ', new_name)
     invalid_chars = r'[\[\]\:\*\?\\\/]'
     new_name = re.sub(invalid_chars, '', new_name)
     
@@ -68,7 +86,13 @@ def clean_sheet_name(ticket_type):
 for ticket_type in ticket_types:
     sheet_name = clean_sheet_name(ticket_type)
     ticket_data = data[data['Ticket Type'] == ticket_type]
+    # Drop columns if they are empty in this subset
+    ticket_data = ticket_data.dropna(axis=1, how='all')
     ticket_data.to_excel(writer, sheet_name=sheet_name, index=False)
+    worksheet = writer.sheets[sheet_name]
+    for i, col in enumerate(ticket_data.columns):
+        max_len = max(ticket_data[col].astype(str).map(len).max(), len(col)) + 2
+        worksheet.set_column(i, i, max_len)
 
 # T-shirt sizes
 tshirt_data = data[['T-shirt sizing (Unisex)', 'First Name', 'Last Name', 'Email']]
@@ -84,3 +108,40 @@ writer.close()
 
 print(f"Workbook saved to {output_path}")
 
+def process_mv_sheets():
+    # Read the Excel file
+    file_path = output_path
+    xl = pd.ExcelFile(file_path)
+
+    # Extract sheet names that start with "MV"
+    mv_sheets = [sheet_name for sheet_name in xl.sheet_names if sheet_name.startswith('MV')]
+
+    all_data = []
+
+    for sheet_name in mv_sheets:
+        df = xl.parse(sheet_name)
+
+        # Create a copy of the DataFrame to avoid SettingWithCopyWarning
+        data = df[['First Name', 'Last Name', 'Email']].copy()
+
+        # Add Phone column if it exists; otherwise, add as empty string
+        if 'Phone' in df.columns:
+            data['Phone'] = df['Phone']
+        else:
+            data['Phone'] = ''
+
+        # Add the Tag column based on sheet name
+        if sheet_name == 'MV Volunteer':
+            data['Tag'] = '2025_Volunteer'
+        else:
+            data['Tag'] = '2025_Rider'
+
+        all_data.append(data)
+
+    # Combine all DataFrames
+    combined_df = pd.concat(all_data, ignore_index=True)
+
+    # Define the column order and write to CSV
+    column_order = ['First Name', 'Last Name', 'Email', 'Phone', 'Tag']
+    combined_df.to_csv('output.csv', columns=column_order, index=False, header=True)
+process_mv_sheets()
