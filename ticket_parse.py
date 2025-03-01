@@ -45,19 +45,15 @@ def upload_to_drive(file_path, folder_id):
     file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
     print(f"Uploaded file to Drive with file ID: {file.get('id')}")
     return file.get('id')
-
-def import_to_google_contacts(csv_path):
+def import_to_google_contacts_for_service(csv_path, service):
+    """Imports contacts from CSV to a single Google account (using People API) and assigns them to groups."""
     import csv
-    from googleapiclient.discovery import build
-    # Obtain credentials for the People API
-    creds = get_credentials(CONTACTS_SCOPES, token_file='contacts_token.json')
-    service = build('people', 'v1', credentials=creds)
-    
-    # Retrieve existing contact groups once and cache them in a dictionary:
+
+    # Retrieve existing contact groups and map group names to resource names.
     groups_response = service.contactGroups().list().execute()
     existing_groups = groups_response.get('contactGroups', [])
     group_name_to_resource = {group['name']: group['resourceName'] for group in existing_groups}
-    
+
     with open(csv_path, newline='', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
@@ -74,15 +70,15 @@ def import_to_google_contacts(csv_path):
                     "value": row["Phone 1 - Value"]
                 }]
             }
-            # Create the contact
+            # Create the contact.
             result = service.people().createContact(body=contact_body).execute()
             contact_resource = result.get('resourceName')
             print(f"Created contact: {contact_resource}")
-            
-            # Get the label from the CSV (which you want to use as a contact group)
+
+            # Use the "Labels" field from the CSV as the contact group.
             label = row["Labels"].strip()
-            # If the group doesn't exist, create it.
             if label not in group_name_to_resource:
+                # Create the group if it doesn't exist.
                 group_body = {"contactGroup": {"name": label}}
                 group_result = service.contactGroups().create(body=group_body).execute()
                 group_resource = group_result.get('resourceName')
@@ -90,18 +86,45 @@ def import_to_google_contacts(csv_path):
                 print(f"Created contact group: {label} with resource {group_resource}")
             else:
                 group_resource = group_name_to_resource[label]
-            
-            # Add the contact to the contact group.
-            # This uses the People API endpoint to modify group members.
-            modify_body = {
-                "resourceNamesToAdd": [contact_resource]
-            }
+
+            # Add the contact to the group.
+            modify_body = {"resourceNamesToAdd": [contact_resource]}
             service.contactGroups().members().modify(
                 resourceName=group_resource,
                 body=modify_body
             ).execute()
             print(f"Added contact {contact_resource} to group {label}")
 
+def import_to_google_contacts(csv_path):
+    """
+    Imports contacts from CSV into two different Google accounts.
+    Make sure to have separate credentials (and token files) for each account.
+    """
+    import os
+
+    # Account 1 credentials (adjust filenames as needed)
+    creds_account1 = get_credentials(
+        CONTACTS_SCOPES,
+        token_file='contacts_token_account1.json',
+        credentials_file='credentials_account1.json'
+    )
+    service_account1 = build('people', 'v1', credentials=creds_account1)
+
+    # Account 2 credentials (adjust filenames as needed)
+    creds_account2 = get_credentials(
+        CONTACTS_SCOPES,
+        token_file='contacts_token_account2.json',
+        credentials_file='credentials_account2.json'
+    )
+    service_account2 = build('people', 'v1', credentials=creds_account2)
+
+    # Import contacts to the first account.
+    print("Importing contacts to Account 1...")
+    import_to_google_contacts_for_service(csv_path, service_account1)
+
+    # Import contacts to the second account.
+    print("Importing contacts to Account 2...")
+    import_to_google_contacts_for_service(csv_path, service_account2)
 def process_mv_sheets(output_path):
     # --- Read the mapping file ---
     mapping_file = "data_map.txt"
