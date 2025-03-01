@@ -109,39 +109,89 @@ writer.close()
 print(f"Workbook saved to {output_path}")
 
 def process_mv_sheets():
+
+    # Define the Google Contacts template columns in order
+    google_columns = [
+        'Name Prefix',
+        'First Name',
+        'Middle Name',
+        'Last Name',
+        'Name Suffix',
+        'Phonetic First Name',
+        'Phonetic Middle Name',
+        'Phonetic Last Name',
+        'Nickname',
+        'File As',
+        'E-mail 1 - Label',
+        'E-mail 1 - Value',
+        'Phone 1 - Label',
+        'Phone 1 - Value',
+        'Address 1 - Label',
+        'Address 1 - Country',
+        'Address 1 - Street',
+        'Address 1 - Extended Address',
+        'Address 1 - City',
+        'Address 1 - Region',
+        'Address 1 - Postal Code',
+        'Address 1 - PO Box',
+        'Organization Name',
+        'Organization Title',
+        'Organization Department',
+        'Birthday',
+        'Event 1 - Label',
+        'Event 1 - Value',
+        'Relation 1 - Label',
+        'Relation 1 - Value',
+        'Website 1 - Label',
+        'Website 1 - Value',
+        'Custom Field 1 - Label',
+        'Custom Field 1 - Value',
+        'Notes',
+        'Labels'
+    ]
+
     # Read the Excel file
-    file_path = output_path
+    file_path = output_path  # ensure output_path is defined elsewhere in your script
     xl = pd.ExcelFile(file_path)
 
     # Extract sheet names that start with "MV"
-    mv_sheets = [sheet_name for sheet_name in xl.sheet_names if sheet_name.startswith('MV')]
+    mv_sheets = [sheet for sheet in xl.sheet_names if sheet.startswith('MV')]
+    all_rows = []
 
-    all_data = []
+    for sheet in mv_sheets:
+        df = xl.parse(sheet)
 
-    for sheet_name in mv_sheets:
-        df = xl.parse(sheet_name)
-
-        # Create a copy of the DataFrame to avoid SettingWithCopyWarning
+        # Create a copy of the DataFrame with the base columns
         data = df[['First Name', 'Last Name', 'Email']].copy()
 
-        # Add Phone column if it exists; otherwise, add as empty string
+        # Add Phone column if it exists; otherwise, use empty strings
         if 'Phone' in df.columns:
             data['Phone'] = df['Phone']
         else:
             data['Phone'] = ''
 
-        # Add the Tag column based on sheet name
-        if sheet_name == 'MV Volunteer':
+        # Add Tag column based on the sheet name
+        if sheet == 'MV Volunteer':
             data['Tag'] = '2025_Volunteer'
         else:
             data['Tag'] = '2025_Rider'
 
-        all_data.append(data)
+        # For each row, create a new dictionary matching the Google Contacts columns
+        for _, row in data.iterrows():
+            contact = {col: "" for col in google_columns}
+            contact["First Name"] = row["First Name"]
+            contact["Last Name"] = row["Last Name"]
+            contact["E-mail 1 - Value"] = row["Email"]
+            contact["Phone 1 - Value"] = row["Phone"]
+            contact["Labels"] = row["Tag"]
 
-    # Combine all DataFrames
-    combined_df = pd.concat(all_data, ignore_index=True)
+            # Optionally, set default labels for email and phone
+            contact["E-mail 1 - Label"] = "Email"
+            contact["Phone 1 - Label"] = "Phone"
 
-    # Define the column order and write to CSV
-    column_order = ['First Name', 'Last Name', 'Email', 'Phone', 'Tag']
-    combined_df.to_csv('output.csv', columns=column_order, index=False, header=True)
+            all_rows.append(contact)
+
+    # Create a final DataFrame with the Google Contacts header order
+    final_df = pd.DataFrame(all_rows, columns=google_columns)
+    final_df.to_csv('output.csv', index=False, header=True)
 process_mv_sheets()
