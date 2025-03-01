@@ -47,16 +47,21 @@ def upload_to_drive(file_path, folder_id):
     return file.get('id')
 
 def import_to_google_contacts(csv_path):
-    """Reads the CSV file and imports each contact using the People API."""
     import csv
+    from googleapiclient.discovery import build
+    # Obtain credentials for the People API
     creds = get_credentials(CONTACTS_SCOPES, token_file='contacts_token.json')
     service = build('people', 'v1', credentials=creds)
+    
+    # Retrieve existing contact groups once and cache them in a dictionary:
+    groups_response = service.contactGroups().list().execute()
+    existing_groups = groups_response.get('contactGroups', [])
+    group_name_to_resource = {group['name']: group['resourceName'] for group in existing_groups}
     
     with open(csv_path, newline='', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
-            # Build a contact object based on available fields.
-            # Adjust the mapping as necessary for your CSV.
+            # Build the contact body using fields from your CSV.
             contact_body = {
                 "names": [{
                     "givenName": row["First Name"],
@@ -68,11 +73,35 @@ def import_to_google_contacts(csv_path):
                 "phoneNumbers": [{
                     "value": row["Phone 1 - Value"]
                 }]
-                # Add additional fields if desired.
             }
+            # Create the contact
             result = service.people().createContact(body=contact_body).execute()
-            print(f"Created contact: {result.get('resourceName')}")
+            contact_resource = result.get('resourceName')
+            print(f"Created contact: {contact_resource}")
             
+            # Get the label from the CSV (which you want to use as a contact group)
+            label = row["Labels"].strip()
+            # If the group doesn't exist, create it.
+            if label not in group_name_to_resource:
+                group_body = {"contactGroup": {"name": label}}
+                group_result = service.contactGroups().create(body=group_body).execute()
+                group_resource = group_result.get('resourceName')
+                group_name_to_resource[label] = group_resource
+                print(f"Created contact group: {label} with resource {group_resource}")
+            else:
+                group_resource = group_name_to_resource[label]
+            
+            # Add the contact to the contact group.
+            # This uses the People API endpoint to modify group members.
+            modify_body = {
+                "resourceNamesToAdd": [contact_resource]
+            }
+            service.contactGroups().members().modify(
+                resourceName=group_resource,
+                body=modify_body
+            ).execute()
+            print(f"Added contact {contact_resource} to group {label}")
+
 def process_mv_sheets(output_path):
     # --- Read the mapping file ---
     mapping_file = "data_map.txt"
