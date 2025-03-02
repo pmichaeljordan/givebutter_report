@@ -1,2 +1,5 @@
 *.json
 data_map.txt
+venv/
+*.csv
+*.xlsx
