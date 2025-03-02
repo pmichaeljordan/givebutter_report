@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-import pandas as pd
 import os
-import requests
 import json
 import datetime
+import requests
+import pandas as pd
 import openpyxl
 from openpyxl.utils.dataframe import dataframe_to_rows
+
+# Google Drive imports
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google_auth_oauthlib.flow import InstalledAppFlow
 
 # Base URL for the API
 base_url = "https://api.givebutter.com/v1/"
@@ -17,6 +23,27 @@ headers = {
 }
 auth_token = os.getenv("GIVEBUTTER_API_TOKEN")
 
+# Google Drive folder ID (replace with your actual folder ID)
+drive_folder_id = "1aFkyJD_Qtto8ZOVZ8Q6FZLS5rBF2ERcw"
+
+# Define the Drive API scopes
+DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
+
+def get_credentials(scopes, token_file='drive_token.json', credentials_file='credentials.json'):
+    """
+    Obtains OAuth credentials using the local token if available,
+    or runs the OAuth flow if not.
+    """
+    creds = None
+    if os.path.exists(token_file):
+        creds = Credentials.from_authorized_user_file(token_file, scopes)
+    if not creds or not creds.valid:
+        flow = InstalledAppFlow.from_client_secrets_file(credentials_file, scopes)
+        creds = flow.run_local_server(port=0)
+        # Save the credentials for the next run
+        with open(token_file, 'w') as token:
+            token.write(creds.to_json())
+    return creds
 
 def get_campaign(auth_token):
     """
@@ -33,14 +60,12 @@ def get_campaign(auth_token):
                 print("No campaign data found in response.")
                 return None
 
-            # List available campaigns
             print("Available Campaigns:")
             for index, campaign in enumerate(campaigns):
                 name = campaign.get("name", "No name")
                 camp_id = campaign.get("id", "N/A")
                 print(f"{index + 1}. {name} (ID: {camp_id})")
 
-            # Let user select the campaign
             selected = input("Enter the number of the campaign you want to use: ")
             try:
                 selected_index = int(selected) - 1
@@ -68,9 +93,7 @@ def get_campaign_members(campaign_id):
     page = 1
     all_members = []
     while True:
-        members_url = (
-            f"https://api.givebutter.com/v1/campaigns/{campaign_id}/members?page={page}"
-        )
+        members_url = f"https://api.givebutter.com/v1/campaigns/{campaign_id}/members?page={page}"
         response = requests.get(members_url, headers=headers)
 
         if response.status_code == 200:
@@ -94,11 +117,9 @@ def get_campaign_members(campaign_id):
 def get_tickets():
     page = 1
     all_tickets = []
-
     while True:
         ticket_url = f"https://api.givebutter.com/v1/tickets?page={page}"
         response = requests.get(ticket_url, headers=headers)
-
         if response.status_code == 200:
             tickets_data = json.loads(response.text)
             ticket_data = tickets_data["data"]
@@ -129,16 +150,7 @@ def format_data():
         print("Warning: 'title' field not found in tickets. No filtering applied.")
 
     # Extract the desired columns
-    columns = [
-        "name",
-        "first_name",
-        "last_name",
-        "email",
-        "phone",
-        "title",
-        "price",
-        "created_at",
-    ]
+    columns = ["name", "first_name", "last_name", "email", "phone", "title", "price", "created_at"]
     data = df[columns].copy()
 
     # Convert 'created_at' to datetime and format it to 'YYYY-MM-DD'
@@ -165,8 +177,7 @@ def format_data():
     for title, count in title_counts.items():
         # Create a sheet name based on title, truncate to 31 characters
         sheet_name = title.rsplit("-", 1)[-1]
-        sheet_name = sheet_name.replace("/", "_")
-        sheet_name = sheet_name[:31]
+        sheet_name = sheet_name.replace("/", "_")[:31]
         ws = wb.create_sheet(sheet_name)
         ws.append(data.columns.tolist())
         filtered_data = data[data["Title"] == title]
@@ -191,6 +202,9 @@ def format_data():
     print(f"Generated Excel file: {path}")
 
 def fundraising(df2: pd.DataFrame, file_name: str = "Fundraising_Progress.xlsx"):
+    """
+    Generates the Fundraising_Progress.xlsx report.
+    """
     df2 = df2.drop(columns=["id", "picture", "items", "url"])
     df2 = df2.rename(
         columns={
@@ -225,11 +239,28 @@ def fundraising(df2: pd.DataFrame, file_name: str = "Fundraising_Progress.xlsx")
         ws.column_dimensions[column].width = adjusted_width
     wb.save(file_name)
     print(f"Generated Excel file: {file_name}")
+    return file_name
+
+def upload_to_drive(file_path, folder_id):
+    """
+    Uploads the specified file to the given Google Drive folder using OAuth credentials.
+    """
+    creds = get_credentials(DRIVE_SCOPES, token_file='drive_token.json', credentials_file='credentials_account3.json')
+    service = build('drive', 'v3', credentials=creds)
+    file_metadata = {
+        'name': os.path.basename(file_path),
+        'parents': [folder_id]
+    }
+    media = MediaFileUpload(file_path, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    uploaded_file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    print(f"File uploaded to Google Drive. File ID: {uploaded_file.get('id')}")
 
 # Main execution
 campaign_id = get_campaign(auth_token)
 if campaign_id:
     df2 = get_campaign_members(campaign_id)
-    fundraising(df2)
+    fundraising_file = fundraising(df2)
     format_data()
+    # Upload the Fundraising_Progress.xlsx file to Google Drive
+    upload_to_drive(fundraising_file, drive_folder_id)
 
