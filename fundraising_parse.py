@@ -245,7 +245,7 @@ def upload_to_drive(file_path, folder_id):
     """
     Uploads the specified file to the given Google Drive folder using OAuth credentials.
     """
-    creds = get_credentials(DRIVE_SCOPES, token_file='drive_token.json', credentials_file='credentials_account3.json')
+    creds = get_credentials(DRIVE_SCOPES, token_file='info_drive_token.json', credentials_file='credentials_account3.json')
     service = build('drive', 'v3', credentials=creds)
     file_metadata = {
         'name': os.path.basename(file_path),

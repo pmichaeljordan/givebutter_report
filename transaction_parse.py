@@ -1,113 +1,47 @@
+#!/usr/bin/env python3
+"""
+Export transactions with detail from Givegbutter.
+
+This script processes the transactions CSV by:
+  - Standardizing column names.
+  - Correcting a campaign description (if needed) in the 'Item Description' column.
+  - Filtering for ticket transactions (where 'Item Subtype' is "ticket").
+  - Dropping unnecessary columns.
+  - Optionally correcting team member email addresses using a mapping CSV, if available.
+  - Splitting the "Team Member" column into first and last names for comparison.
+  - Saving CSV subsets (one per campaign) and a master Excel file with separate sheets.
+"""
+
 import pandas as pd
 import os
 import glob
 import time
 
-#!/usr/bin/env python3
-
-''' Export transactions with detail from Givegbutter. Include all fields. Parser will drop any uncessary fields.
-    Create a mapper file for any tickets that were paid for someone other than the rider as csv with the following columns:
-    1. Name Team member (must match)
-    2. email address from Team member (Will replace the incorrect email address)
-    '''
-
-# Load the CSV file into a DataFrame
-file_path = 'transactions.csv'
-df = pd.read_csv(file_path)
-
-# Change any column data that matches '2024 Ride for Missing Children - MV New and Returning Riders' to '2024 Ride for Missing Children - MV New / Returning Riders'
-# This was due to testing tickets before going live. Don't do this next year. Also use shorter ticket names.
-df['Description'] = df['Description'].replace('2024 Ride for Missing Children - MV New and Returning Riders', '2024 Ride for Missing Children - MV New / Returning Riders')
-
-# Filter out the rows where Subtype is 'ticket'
-tickets_df = df[df['Subtype'] == 'ticket']
-
-# Columns to be dropped
-columns_to_drop = ["Campaign", "Campaign slug", "Team", "Reference #"]
-
-# Drop the specified columns
-tickets_df = tickets_df.drop(columns=columns_to_drop, errors='ignore')
-
-# Load the name_mapping CSV file
-df_mapping = pd.read_csv('name_mapping.csv')
-
-# Split the 'Team member' column into first and last names
-tickets_df[['First name from Team member', 'Last name']] = tickets_df['Team member'].str.split(' ', n=1, expand=True)
-
-# Convert to lowercase
-tickets_df['First name from Team member'] = tickets_df['First name from Team member'].str.lower()
-tickets_df['First name'] = tickets_df['First name'].str.lower()
-
-# Find mismatches between 'First name from Team member' and 'First name'
-mismatches = tickets_df['First name from Team member'] != tickets_df['First name']
-
-# Strip leading/trailing spaces from column names
-df_mapping.columns = df_mapping.columns.str.strip()
-
-# For each mismatch, find the correct email in the mapping DataFrame
-for i in tickets_df[mismatches].index:
-    team_member = tickets_df.loc[i, 'Team member']
-    mapping_entry = df_mapping[df_mapping['Team member'] == team_member].reset_index(drop=True)
-
-    # If a match is found in the mapping DataFrame, update the 'Email' column in tickets_df
-    if not mapping_entry.empty:
-        correct_email = mapping_entry.loc[0, 'Email']
-        tickets_df.loc[i, 'Email'] = correct_email
-
-# Columns to be dropped
-columns_to_drop = ["First name", "Last name", "Country", "Status", "Fund ID", "Fund code", "Fund name", "Dedication type", "Dedication name", "Company", "Dedication recipient name", "Dedication recipient email", 
-                   "Method", "Credit card last four", "Credit card expiration date", "Discount code", "Method subtype", "Amount", "Fee", "Fee covered", "Donated", "Payout", "Currency",
-                    "Recurring plan ID", "Frequency", "Check number", "Check deposited (UTC)", "Payment captured (UTC)", "Refund date (UTC)", "Dispute status", "Acknowledged", "Anonymous hide name",
-                    "Anonymous hide amount", "Public name", "Public message", "Donor local timezone", "UTM source", "UTM medium", "UTM campaign", "UTM term", "UTM content", "Referrer", "Widget ID", "Match name", "Match amount", "External ID",
-                     "Household ID", "Household name", "Subtype", "Quantity", "Price", "Discount", "Total", "First name from Team member" ]
-
-# Drop the specified columns
-tickets_df = tickets_df.drop(columns=columns_to_drop, errors='ignore')
-
-# Mapping of original descriptions to new sheet names provided by the user
-description_to_sheet_map = {
-    '2024 Ride for Missing Children - MV New / Returning Riders': 'NewAndReturning',
-    '2024 Ride for Missing Children - MV Reciprocal Riders': 'Reciprocal',
-    '2024 Ride for Missing Children - MV Volunteer': 'Volunteer'
-}
-
-# Function to auto-adjust columns' width
 def auto_adjust_columns_width(df, writer, sheet_name):
+    """Auto-adjust column widths for an Excel sheet."""
     for column in df:
-        # Find the length of the longest entry in the column
         column_length = max(df[column].astype(str).map(len).max(), len(column))
-        # Find the column index (0-indexed)
         col_idx = df.columns.get_loc(column)
-        # Adjust the column width at the column index
         writer.sheets[sheet_name].set_column(col_idx, col_idx, column_length)
 
-# Assuming the directory structure and file naming convention
-output_dir = 'Rider_Volunteer_CSVs'
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
-
-# Function to save DataFrame to CSV and compare with the previous version
-def save_and_compare_df(df, description):
-    # Filename convention: Description_CurrentTime.csv
+def save_and_compare_df(df, description, output_dir):
+    """
+    Save a DataFrame to CSV with a filename based on the description and current time.
+    If a previous file exists, compare and output any new rows.
+    """
     filename = f"{description.replace(' ', '_')}_{int(time.time())}.csv"
     filepath = os.path.join(output_dir, filename)
-    
-    # Save current DataFrame to CSV
     df.to_csv(filepath, index=False)
     
-    # Find previous file for the same description
-    previous_files = glob.glob(os.path.join(output_dir, f"{description.replace(' ', '_')}*.csv"))
-    previous_files = [f for f in previous_files if f != filepath]  # Exclude current file
+    # Find previous files for this description (exclude the current file)
+    previous_files = [f for f in glob.glob(os.path.join(output_dir, f"{description.replace(' ', '_')}*.csv"))
+                      if f != filepath]
     
     if previous_files:
-        # Assuming there's only one previous file for simplicity
-        previous_file = max(previous_files, key=os.path.getctime)  # Get the most recent file
+        previous_file = max(previous_files, key=os.path.getctime)
         previous_df = pd.read_csv(previous_file)
-        
-        # Compare DataFrames to find new rows in the current DataFrame
-        # This simplistic comparison assumes you're only looking for new rows added
+        # This simplistic comparison looks for new rows
         comparison_df = pd.concat([df, previous_df, previous_df]).drop_duplicates(keep=False)
-        
         if not comparison_df.empty:
             changes_filename = f"changes_{filename}"
             changes_filepath = os.path.join(output_dir, changes_filename)
@@ -118,25 +52,102 @@ def save_and_compare_df(df, description):
     else:
         print(f"No previous files found for {description}. Current file saved as {filename}.")
 
-for original_desc, new_sheet_name in description_to_sheet_map.items():
-    # Filter the DataFrame based on the Description
-    subset_df = tickets_df[tickets_df['Description'] == original_desc]
+def main():
+    # Load the transactions CSV and strip whitespace from column names
+    file_path = 'transactions.csv'
+    df = pd.read_csv(file_path)
+    df.columns = df.columns.str.strip()
+
+    # Correct campaign description if needed in the 'Item Description' column.
+    df['Item Description'] = df['Item Description'].replace(
+        '2025 Ride for Missing Children - MV New and Returning Riders',
+        '2025 Ride for Missing Children - MV New / Returning Riders'
+    )
     
-    # Save and compare the subset DataFrame
-    save_and_compare_df(subset_df, new_sheet_name)
+    # Filter rows where 'Item Subtype' is 'ticket'
+    tickets_df = df[df['Item Subtype'] == 'ticket'].copy()
+    
+    # Drop columns that are not needed for processing
+    initial_drop_columns = ["Campaign Title", "Campaign Slug", "Team", "Reference Number"]
+    tickets_df.drop(columns=initial_drop_columns, errors='ignore', inplace=True)
+    
+    # Try to load the name mapping CSV if it exists and is not empty
+    mapping_file = 'name_mapping.csv'
+    df_mapping = None
+    if os.path.exists(mapping_file) and os.path.getsize(mapping_file) > 0:
+        try:
+            temp_mapping = pd.read_csv(mapping_file)
+            if not temp_mapping.empty:
+                df_mapping = temp_mapping.copy()
+                df_mapping.columns = df_mapping.columns.str.strip()
+        except pd.errors.EmptyDataError:
+            print("Mapping file is empty. Skipping email correction.")
+            df_mapping = None
+    else:
+        print("Mapping file not found or is empty. Skipping email correction.")
+    
+    # Split the 'Team Member' column into first and last names for comparison
+    if 'Team Member' in tickets_df.columns and 'First Name' in tickets_df.columns:
+        tickets_df[['First name from Team Member', 'Last name from Team Member']] = \
+            tickets_df['Team Member'].str.split(' ', n=1, expand=True)
+        
+        # Convert names to lowercase for accurate comparison
+        tickets_df['First name from Team Member'] = tickets_df['First name from Team Member'].str.lower()
+        tickets_df['First Name'] = tickets_df['First Name'].str.lower()
+        
+        # Identify mismatches between the first name extracted from "Team Member" and the "First Name" column
+        mismatches = tickets_df['First name from Team Member'] != tickets_df['First Name']
+        
+        # If mapping data is available, update the 'Email' using the mapping CSV (match on "Team member")
+        if df_mapping is not None:
+            for i in tickets_df[mismatches].index:
+                team_member = tickets_df.loc[i, 'Team Member']
+                mapping_entry = df_mapping[df_mapping['Team member'] == team_member].reset_index(drop=True)
+                if not mapping_entry.empty:
+                    correct_email = mapping_entry.loc[0, 'Email']
+                    tickets_df.loc[i, 'Email'] = correct_email
+    
+    # Drop unnecessary columns for final output.
+    drop_columns = [
+        "First Name", "Last Name", "Country", "Status Friendly", "Fund ID", "Fund Code", "Fund Name", 
+        "Dedication Type", "Dedication Name", "Company", "Dedication Recipient Name", "Dedication Recipient Email", 
+        "Method", "CC Last Four", "CC Expiration Date", "Discount Code", "Method Subtype", "Amount", "Fee", "Fee Covered", 
+        "Donated", "Payout", "Currency", "Plan ID", "Frequency", "Check Number", "Check Deposited (UTC)", 
+        "Payment Captured (UTC)", "Refund Date (UTC)", "Dispute Status", "Acknowledged", "Hide Name", "Hide Amount", 
+        "Public Name", "Public Message", "Donor's Local Timezone", "Payment Captured (Donor's Local Timezone)", 
+        "UTM Source", "UTM Medium", "UTM Campaign", "UTM Term", "UTM Content", "Referrer", "Widget Id", "Match Name", 
+        "Match Amount", "External ID", "Household ID", "Household Name", "Item Subtype", "Item Quantity", "Item Price", 
+        "Item Discount", "Item Total", "First name from Team Member", "Last name from Team Member"
+    ]
+    tickets_df.drop(columns=drop_columns, errors='ignore', inplace=True)
+    
+    # Mapping of campaign descriptions (from 'Item Description') to sheet names
+    description_to_sheet_map = {
+        '2025 Ride for Missing Children - MV New / Returning Riders': 'NewAndReturning',
+        '2025 Ride for Missing Children - MV Reciprocal Riders': 'Reciprocal',
+        '2025 Ride for Missing Children - MV Volunteer': 'Volunteer'
+    }
+    
+    # Ensure output directory exists
+    output_dir = 'Rider_Volunteer_CSVs'
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save individual CSV files for each campaign description
+    for original_desc, sheet_name in description_to_sheet_map.items():
+        subset_df = tickets_df[tickets_df['Item Description'] == original_desc]
+        save_and_compare_df(subset_df, sheet_name, output_dir)
+    
+    # Create a master Excel file with separate sheets per campaign
+    current_time = int(time.time())
+    mapped_excel_path = f'Rider_Volunteer_MasterList_{current_time}.xlsx'
+    
+    with pd.ExcelWriter(mapped_excel_path, engine='xlsxwriter') as writer:
+        for original_desc, sheet_name in description_to_sheet_map.items():
+            subset_df = tickets_df[tickets_df['Item Description'] == original_desc]
+            subset_df.to_excel(writer, sheet_name=sheet_name, index=False)
+            auto_adjust_columns_width(subset_df, writer, sheet_name)
+    print(f"Master Excel file saved as {mapped_excel_path}")
 
-# Get the current epoch time
-current_time = int(time.time())
+if __name__ == '__main__':
+    main()
 
-# Create a new Excel writer object with the current epoch time in the filename
-mapped_excel_path = f'Rider_Volunteer_MasterList_{current_time}.xlsx'
-
-with pd.ExcelWriter(mapped_excel_path, engine='xlsxwriter') as mapped_writer:
-    # Write each subset of data to a separate sheet based on the new mapping
-    for original_desc, new_sheet_name in description_to_sheet_map.items():
-        # Find the subset of dataframe for each original description
-        subset_df = tickets_df[tickets_df['Description'] == original_desc]
-        # Write to the corresponding new sheet name
-        subset_df.to_excel(mapped_writer, sheet_name=new_sheet_name, index=False)
-        # Auto-adjust columns' width
-        auto_adjust_columns_width(subset_df, mapped_writer, new_sheet_name)

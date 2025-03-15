@@ -1,199 +1,98 @@
 #!/usr/bin/env python3
-import os
 import pandas as pd
+import glob
+import os
+import re
 from datetime import datetime
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 
-# If modifying these scopes, delete your previously saved token files.
-DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
-CONTACTS_SCOPES = ['https://www.googleapis.com/auth/contacts']
+def parse_tickets():
+    # Find the latest CSV file with prefix 'tickets-'
+    def find_latest_csv(prefix='tickets-', directory='.'):
+        files = glob.glob(os.path.join(directory, f"{prefix}*.csv"))
+        if files:
+            return max(files, key=os.path.getmtime)
+        else:
+            raise FileNotFoundError(f"No CSV files starting with '{prefix}' found in {directory}")
 
-# Define output_path at the global level
-date_str = datetime.now().strftime("%m-%d-%Y")
-output_path = f"./parsed_tickets_{date_str}.xlsx"
-
-def get_credentials(scopes, token_file='token.json', credentials_file='credentials.json'):
-    """
-    Obtains credentials for a given scope.
-    You must create credentials.json from the Google Cloud Console.
-    """
-    creds = None
-    if os.path.exists(token_file):
-        creds = Credentials.from_authorized_user_file(token_file, scopes)
-    if not creds or not creds.valid:
-        flow = InstalledAppFlow.from_client_secrets_file(credentials_file, scopes)
-        creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open(token_file, 'w') as token:
-            token.write(creds.to_json())
-    return creds
-
-def upload_to_drive(file_path, folder_id):
-    """Uploads a file to Google Drive inside the specified folder."""
-    creds = get_credentials(DRIVE_SCOPES, token_file='drive_token.json')
-    service = build('drive', 'v3', credentials=creds)
-    file_metadata = {
-        'name': os.path.basename(file_path),
-        'parents': [folder_id]
-    }
-    # Set the MIME type based on your file; here assuming an Excel file.
-    media = MediaFileUpload(file_path,
-                            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-    print(f"Uploaded file to Drive with file ID: {file.get('id')}")
-    return file.get('id')
-def import_to_google_contacts_for_service(csv_path, service):
-    """Imports contacts from CSV to a single Google account (using People API) and assigns them to groups."""
-    import csv
-
-    # Retrieve existing contact groups and map group names to resource names.
-    groups_response = service.contactGroups().list().execute()
-    existing_groups = groups_response.get('contactGroups', [])
-    group_name_to_resource = {group['name']: group['resourceName'] for group in existing_groups}
-
-    with open(csv_path, newline='', encoding='utf-8') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            # Build the contact body using fields from your CSV.
-            contact_body = {
-                "names": [{
-                    "givenName": row["First Name"],
-                    "familyName": row["Last Name"]
-                }],
-                "emailAddresses": [{
-                    "value": row["E-mail 1 - Value"]
-                }],
-                "phoneNumbers": [{
-                    "value": row["Phone 1 - Value"]
-                }]
-            }
-            # Create the contact.
-            result = service.people().createContact(body=contact_body).execute()
-            contact_resource = result.get('resourceName')
-            print(f"Created contact: {contact_resource}")
-
-            # Use the "Labels" field from the CSV as the contact group.
-            label = row["Labels"].strip()
-            if label not in group_name_to_resource:
-                # Create the group if it doesn't exist.
-                group_body = {"contactGroup": {"name": label}}
-                group_result = service.contactGroups().create(body=group_body).execute()
-                group_resource = group_result.get('resourceName')
-                group_name_to_resource[label] = group_resource
-                print(f"Created contact group: {label} with resource {group_resource}")
-            else:
-                group_resource = group_name_to_resource[label]
-
-            # Add the contact to the group.
-            modify_body = {"resourceNamesToAdd": [contact_resource]}
-            service.contactGroups().members().modify(
-                resourceName=group_resource,
-                body=modify_body
-            ).execute()
-            print(f"Added contact {contact_resource} to group {label}")
-
-def import_to_google_contacts(csv_path):
-    """
-    Imports contacts from CSV into two different Google accounts.
-    Make sure to have separate credentials (and token files) for each account.
-    """
-    import os
-
-    # Account 1 credentials (adjust filenames as needed)
-    creds_account1 = get_credentials(
-        CONTACTS_SCOPES,
-        token_file='contacts_token_account1.json',
-        credentials_file='credentials_account1.json'
-    )
-    service_account1 = build('people', 'v1', credentials=creds_account1)
-
-    # Account 2 credentials (adjust filenames as needed)
-    creds_account2 = get_credentials(
-        CONTACTS_SCOPES,
-        token_file='contacts_token_account2.json',
-        credentials_file='credentials_account2.json'
-    )
-    service_account2 = build('people', 'v1', credentials=creds_account2)
-
-    # Import contacts to the first account.
-    print("Importing contacts to Account 1...")
-    import_to_google_contacts_for_service(csv_path, service_account1)
-
-    # Import contacts to the second account.
-    print("Importing contacts to Account 2...")
-    import_to_google_contacts_for_service(csv_path, service_account2)
-def process_mv_sheets(output_path):
-    # --- Read the mapping file ---
-    mapping_file = "data_map.txt"
     try:
-        mapping_df = pd.read_csv(mapping_file, header=None, names=["Incorrect", "Correct"])
-        mapping_dict = mapping_df.set_index("Incorrect")["Correct"].to_dict()
-    except Exception as e:
-        mapping_dict = {}
+        file_path = find_latest_csv(prefix='tickets-', directory='.')
+        print(f"Processing file: {file_path}")
+    except FileNotFoundError as e:
+        print(str(e))
+        return None
 
-    # Define Google Contacts header template
-    google_columns = [
-        'Name Prefix', 'First Name', 'Middle Name', 'Last Name', 'Name Suffix',
-        'Phonetic First Name', 'Phonetic Middle Name', 'Phonetic Last Name',
-        'Nickname', 'File As', 'E-mail 1 - Label', 'E-mail 1 - Value',
-        'Phone 1 - Label', 'Phone 1 - Value', 'Address 1 - Label', 'Address 1 - Country',
-        'Address 1 - Street', 'Address 1 - Extended Address', 'Address 1 - City',
-        'Address 1 - Region', 'Address 1 - Postal Code', 'Address 1 - PO Box',
-        'Organization Name', 'Organization Title', 'Organization Department', 'Birthday',
-        'Event 1 - Label', 'Event 1 - Value', 'Relation 1 - Label', 'Relation 1 - Value',
-        'Website 1 - Label', 'Website 1 - Value', 'Custom Field 1 - Label',
-        'Custom Field 1 - Value', 'Notes', 'Labels'
+    # Read the CSV with specific parameters
+    data = pd.read_csv(
+        file_path,
+        sep=",",
+        quotechar='"',
+        encoding="utf-8-sig"
+    )
+    cols_to_drop = [
+        'Ticket Suffix',
+        'Campaign Code',
+        'Campaign Title',
+        'Price',
+        'Check In',
+        'Promo Code',
+        'Checked in by',
+        'Checkin type',
+        'Checkin source',
+        'Check-in Date (UTC)',
+        'Bundled',
+        'Bundle Type'
     ]
+    data.drop(columns=cols_to_drop, errors='ignore', inplace=True)
+    print("Data shape (rows, cols):", data.shape)
+    print("Columns found:")
+    for c in data.columns:
+        print(f"  '{c}'")
 
-    xl = pd.ExcelFile(output_path)
-    mv_sheets = [sheet for sheet in xl.sheet_names if sheet.startswith('MV')]
-    all_rows = []
+    # Clean column names
+    data.columns = data.columns.str.strip().str.strip('"')
+    print("Columns after cleaning:")
+    print(data.columns.tolist())
 
-    for sheet in mv_sheets:
-        df = xl.parse(sheet)
-        data = df[['First Name', 'Last Name', 'Email']].copy()
-        data['Phone'] = df['Phone'] if 'Phone' in df.columns else ''
-        data['Tag'] = '2025_Volunteer' if sheet == 'MV Volunteer' else '2025_Rider'
+    if 'Ticket Type' not in data.columns:
+        raise ValueError("Could not find 'Ticket Type' in the CSV columns.")
 
-        for _, row in data.iterrows():
-            first_name = mapping_dict.get(row["First Name"], row["First Name"]).title()
-            last_name  = mapping_dict.get(row["Last Name"], row["Last Name"]).title()
-            email      = mapping_dict.get(row["Email"], row["Email"])
-            phone      = mapping_dict.get(row["Phone"], row["Phone"])
-            tag        = mapping_dict.get(row["Tag"], row["Tag"])
+    ticket_types = data['Ticket Type'].unique()
+    print("Unique ticket types:", ticket_types)
 
-            contact = {col: "" for col in google_columns}
-            contact["First Name"] = first_name
-            contact["Last Name"] = last_name
-            contact["E-mail 1 - Value"] = email
-            contact["Phone 1 - Value"] = phone
-            contact["Labels"] = tag
-            contact["E-mail 1 - Label"] = "Email"
-            contact["Phone 1 - Label"] = "Phone"
-            all_rows.append(contact)
+    date_str = datetime.now().strftime("%m-%d-%Y")
+    output_path = f"./parsed_tickets_{date_str}.xlsx"
+    writer = pd.ExcelWriter(output_path, engine='xlsxwriter')
 
-    final_df = pd.DataFrame(all_rows, columns=google_columns)
-    final_csv = 'output.csv'
-    final_df.to_csv(final_csv, index=False, header=True)
-    print(f"Google Contacts CSV saved to {final_csv}")
-    return final_csv
+    def clean_sheet_name(ticket_type):
+        parts = ticket_type.split(' - ', 1)
+        new_name = parts[1].strip() if len(parts) == 2 else ticket_type.strip()
+        new_name = re.sub(r' / ', ' ', new_name)
+        invalid_chars = r'[\[\]\:\*\?\\\/]'
+        new_name = re.sub(invalid_chars, '', new_name)
+        return new_name[:31]
+
+    for ticket_type in ticket_types:
+        sheet_name = clean_sheet_name(ticket_type)
+        ticket_data = data[data['Ticket Type'] == ticket_type]
+        ticket_data = ticket_data.dropna(axis=1, how='all')
+        ticket_data.to_excel(writer, sheet_name=sheet_name, index=False)
+        worksheet = writer.sheets[sheet_name]
+        for i, col in enumerate(ticket_data.columns):
+            max_len = max(ticket_data[col].astype(str).map(len).max(), len(col)) + 2
+            worksheet.set_column(i, i, max_len)
+
+    # Create a T-shirt Sizes sheet
+    tshirt_data = data[['T-shirt sizing (Unisex)', 'First Name', 'Last Name', 'Email']]
+    tshirt_summary = tshirt_data['T-shirt sizing (Unisex)'].value_counts().reset_index()
+    tshirt_summary.columns = ['T-Shirt Size', 'Count']
+    tshirt_data.to_excel(writer, sheet_name='T-Shirt Sizes', index=False, startrow=0)
+    tshirt_summary.to_excel(writer, sheet_name='T-Shirt Sizes', index=False, startrow=len(tshirt_data) + 2)
+
+    writer.close()
+    print(f"Workbook saved to {output_path}")
+
+    return output_path
 
 if __name__ == '__main__':
-    # Your script already generates an Excel file; assume output_path is defined.
-    # For example, after processing tickets:
-    print("Workbook saved to", output_path)
-
-    # Upload the Excel file to a Google Drive folder.
-    # Replace 'your_folder_id_here' with the actual folder ID on your Google Drive.
-    drive_folder_id = '11Jsj1pPf7NWYdVCzmuTrjTWj80JObSa4'
-    upload_to_drive(output_path, drive_folder_id)
-
-    # Process the MV sheets and create output.csv for Google Contacts.
-    csv_file = process_mv_sheets(output_path)
-
-    # Import contacts to Google Contacts using the People API.
-    import_to_google_contacts(csv_file)
+    parse_tickets()
 
