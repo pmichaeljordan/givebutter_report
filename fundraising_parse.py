@@ -138,6 +138,9 @@ def format_data():
     Generates the GiveButterReport.xlsx file for tickets that have titles starting with the current year.
     """
     df = pd.DataFrame(get_tickets())
+    
+    # Standardize column names to lowercase to avoid case mismatch issues
+    df.columns = [col.lower() for col in df.columns]
 
     # Convert email addresses to lowercase
     df["email"] = df["email"].str.lower()
@@ -201,10 +204,9 @@ def format_data():
     wb.save(path)
     print(f"Generated Excel file: {path}")
 
+
 def fundraising(df2: pd.DataFrame, base_file_name: str = "Fundraising_Progress"):
-    """
-    Generates the Fundraising_Progress report and includes the date/time the script was run.
-    """
+    # Clean up campaign members data
     df2 = df2.drop(columns=["id", "picture", "items", "url"])
     df2 = df2.rename(
         columns={
@@ -218,26 +220,58 @@ def fundraising(df2: pd.DataFrame, base_file_name: str = "Fundraising_Progress")
             "donors": "Donors",
         }
     )
+    # Convert emails to lowercase for consistent merging
+    df2["Email"] = df2["Email"].str.lower()
+
+    # Calculate total raised from campaign members
     total_raised = df2["Raised"].sum()
+
+    # Retrieve ticket data and prepare for merging
+    tickets_df = pd.DataFrame(get_tickets())
+    # Standardize ticket DataFrame columns to lowercase
+    tickets_df.columns = [col.lower() for col in tickets_df.columns]
+    tickets_df["email"] = tickets_df["email"].str.lower()
+    current_year_str = str(datetime.datetime.now().year)
+    if "title" in tickets_df.columns:
+        # Filter tickets for the current year as before
+        tickets_df = tickets_df[tickets_df["title"].str.startswith(current_year_str)]
+    else:
+        print("Warning: 'title' field not found in tickets. No filtering applied.")
+    # If multiple tickets exist for one email, use the first one
+    tickets_df = tickets_df.drop_duplicates(subset=["email"], keep="first")
+
+    # Merge the ticket 'title' into the campaign member dataframe based on email
+    df2 = df2.merge(tickets_df[["email", "title"]], left_on="Email", right_on="email", how="left")
+    df2 = df2.drop(columns=["email"])
+    # Rename the merged ticket title column to 'Title'
+    df2 = df2.rename(columns={"title": "Title"})
+    
+    # Define a mapping for the long title strings to shortened versions
+    title_mapping = {
+        "2025 Ride for Missing Children - MV New / Returning High School Student Riders": "High School Riders",
+        "2025 Ride for Missing Children - MV New / Returning Riders": "New/Returning",
+        "2025 Ride for Missing Children - MV Volunteer": "Volunteer",
+        "2025 Ride for Missing Children - MV Corporate Riders": "Corporate Riders",
+        "2025 Ride for Missing Children - MV Reciprocal Riders": "Reciprocal Riders"
+    }
+    # Apply the mapping: if a title matches one of the keys, it will be replaced; otherwise, it remains unchanged.
+    df2["Title"] = df2["Title"].map(title_mapping).fillna(df2["Title"])
+
+    # Create the workbook and worksheet
     wb = openpyxl.Workbook()
     default_sheet = wb["Sheet"]
     wb.remove(default_sheet)
     ws = wb.create_sheet("Fundraising")
-    
-    # Insert a timestamp at the top of the sheet
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ws.append([f"Report generated: {timestamp}"])
-    ws.append([])  # blank row for spacing
 
-    # Append the header row
+    # Append the header row (now including 'Title')
     ws.append(df2.columns.tolist())
     for index, row in df2.iterrows():
         ws.append(row.tolist())
 
-    # Append total raised at the bottom
+    # Append the total raised at the bottom
     ws.append(["", "", "", "", "Total Raised", total_raised, "", ""])
     
-    # Adjust column widths
+    # Adjust column widths for readability
     for col in ws.columns:
         max_length = 0
         column = col[0].column_letter
@@ -245,16 +279,18 @@ def fundraising(df2: pd.DataFrame, base_file_name: str = "Fundraising_Progress")
             try:
                 if len(str(cell.value)) > max_length:
                     max_length = len(str(cell.value))
-            except:
+            except Exception:
                 pass
         adjusted_width = (max_length + 2) * 1.2
         ws.column_dimensions[column].width = adjusted_width
 
-    # Create a filename that includes the current date/time for uniqueness
+    # Generate a filename with a timestamp for uniqueness and save the workbook
     file_name = f"{base_file_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     wb.save(file_name)
     print(f"Generated Excel file: {file_name}")
     return file_name
+
+
 
 def upload_to_drive(file_path, folder_id):
     """
