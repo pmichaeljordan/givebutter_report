@@ -190,7 +190,7 @@ def format_data():
             for cell in col:
                 try:
                     if len(str(cell.value)) > max_length:
-                        max_length = len(cell.value)
+                        max_length = len(str(cell.value))
                 except:
                     pass
             adjusted_width = (max_length + 2) * 1.2
@@ -201,9 +201,9 @@ def format_data():
     wb.save(path)
     print(f"Generated Excel file: {path}")
 
-def fundraising(df2: pd.DataFrame, file_name: str = "Fundraising_Progress.xlsx"):
+def fundraising(df2: pd.DataFrame, base_file_name: str = "Fundraising_Progress"):
     """
-    Generates the Fundraising_Progress.xlsx report.
+    Generates the Fundraising_Progress report and includes the date/time the script was run.
     """
     df2 = df2.drop(columns=["id", "picture", "items", "url"])
     df2 = df2.rename(
@@ -223,20 +223,35 @@ def fundraising(df2: pd.DataFrame, file_name: str = "Fundraising_Progress.xlsx")
     default_sheet = wb["Sheet"]
     wb.remove(default_sheet)
     ws = wb.create_sheet("Fundraising")
-    for r in dataframe_to_rows(df2, index=False, header=True):
-        ws.append(r)
+    
+    # Insert a timestamp at the top of the sheet
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ws.append([f"Report generated: {timestamp}"])
+    ws.append([])  # blank row for spacing
+
+    # Append the header row
+    ws.append(df2.columns.tolist())
+    for index, row in df2.iterrows():
+        ws.append(row.tolist())
+
+    # Append total raised at the bottom
     ws.append(["", "", "", "", "Total Raised", total_raised, "", ""])
+    
+    # Adjust column widths
     for col in ws.columns:
         max_length = 0
         column = col[0].column_letter
         for cell in col:
             try:
                 if len(str(cell.value)) > max_length:
-                    max_length = len(cell.value)
+                    max_length = len(str(cell.value))
             except:
                 pass
         adjusted_width = (max_length + 2) * 1.2
         ws.column_dimensions[column].width = adjusted_width
+
+    # Create a filename that includes the current date/time for uniqueness
+    file_name = f"{base_file_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     wb.save(file_name)
     print(f"Generated Excel file: {file_name}")
     return file_name
@@ -245,7 +260,7 @@ def upload_to_drive(file_path, folder_id):
     """
     Uploads the specified file to the given Google Drive folder using OAuth credentials.
     """
-    creds = get_credentials(DRIVE_SCOPES, token_file='info_drive_token.json', credentials_file='credentials_account3.json')
+    creds = get_credentials(DRIVE_SCOPES, token_file='drive_token.json', credentials_file='credentials_account3.json')
     service = build('drive', 'v3', credentials=creds)
     file_metadata = {
         'name': os.path.basename(file_path),
@@ -261,6 +276,6 @@ if campaign_id:
     df2 = get_campaign_members(campaign_id)
     fundraising_file = fundraising(df2)
     format_data()
-    # Upload the Fundraising_Progress.xlsx file to Google Drive
+    # Upload the Fundraising_Progress file to Google Drive
     upload_to_drive(fundraising_file, drive_folder_id)
 
