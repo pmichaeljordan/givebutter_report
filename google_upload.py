@@ -14,6 +14,9 @@ import time
 DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
 CONTACTS_SCOPES = ['https://www.googleapis.com/auth/contacts']
 
+# Global sleep duration to slow processing between API calls (in seconds)
+API_SLEEP = 1.0
+
 def get_credentials(scopes, token_file='token.json', credentials_file='credentials.json', auth_message=None):
     creds = None
     if os.path.exists(token_file):
@@ -54,9 +57,8 @@ def get_all_contacts(service):
         ).execute()
         connections = response.get('connections', [])
         for person in connections:
-            emails = person.get('emailAddresses', [])
-            for email in emails:
-                email_val = email.get('value', '').strip().lower()
+            for email_obj in person.get('emailAddresses', []):
+                email_val = email_obj.get('value', '').strip().lower()
                 if email_val:
                     contacts[email_val] = person
         page_token = response.get('nextPageToken')
@@ -65,105 +67,124 @@ def get_all_contacts(service):
     return contacts
 
 def modify_membership(service, resource, body, max_retries=5):
-    """Wrapper to modify contact group membership with exponential backoff.
-       Logs an error and returns None if max retries are exceeded.
-    """
+    """Wrapper to modify contact group membership with exponential backoff."""
     delay = 1
     for i in range(max_retries):
         try:
-            return service.contactGroups().members().modify(
+            result = service.contactGroups().members().modify(
                 resourceName=resource,
                 body=body
             ).execute()
+            return result
         except HttpError as e:
             if e.resp.status == 429:
                 print(f"Quota exceeded for membership modification. Retrying in {delay} seconds... (Attempt {i+1}/{max_retries})")
                 time.sleep(delay)
-                delay *= 2  # Exponential backoff
+                delay *= 2
             else:
                 raise e
     print("Max retries exceeded for membership modification for resource", resource, "with body", body)
     return None
 
 def import_to_google_contacts_for_service(csv_path, service):
-    """Imports contacts from CSV to a single Google account. It ensures that only the contacts
-       in the current CSV have the group tag ("2025_Rider" or "2025_Volunteer"). Any other contact
-       in these groups will have that membership removed.
     """
+    Deletes the target groups (labels) in Google Contacts and then processes the CSV.
+    Each CSV row is processed to add or update a contact and add it to the appropriate group.
+    Since the target labels are deleted at the start, the groups are re-created solely based on the CSV.
+    """
+    # Define the target groups (labels) that will be managed.
+    target_groups = ["2025_Rider", "2025_Volunteer"]
+    
     # Retrieve existing contact groups.
     groups_response = service.contactGroups().list().execute()
     existing_groups = groups_response.get('contactGroups', [])
-    group_name_to_resource = {group['name']: group['resourceName'] for group in existing_groups}
-
-    # Retrieve and cache all contacts.
-    contacts_cache = get_all_contacts(service)
+    group_name_to_resource = {}
     
-    # Read CSV completely and build set of emails.
+    # Delete any existing target groups.
+    for group in existing_groups:
+        name = group.get('name')
+        resource = group.get('resourceName')
+        if name in target_groups:
+            try:
+                print(f"Deleting existing group '{name}' with resource {resource}.")
+                service.contactGroups().delete(resourceName=resource).execute()
+                time.sleep(API_SLEEP)
+            except HttpError as e:
+                print(f"Failed to delete group '{name}': {e}")
+        else:
+            group_name_to_resource[name] = resource
+
+    print("Waiting for groups to be fully deleted...")
+    time.sleep(5)
+    
+    # Read the CSV rows.
     with open(csv_path, newline='', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
         csv_rows = list(reader)
-    csv_emails = {row["E-mail 1 - Value"].strip().lower() for row in csv_rows}
     
-    # Pre-loop: Remove target group memberships from contacts not in the CSV.
-    target_groups = ["2025_Rider", "2025_Volunteer"]
-    for group_label in target_groups:
-        if group_label in group_name_to_resource:
-            group_resource = group_name_to_resource[group_label]
-            for email, person in contacts_cache.items():
-                if email not in csv_emails:
-                    memberships = person.get("memberships", [])
-                    for membership in memberships:
-                        if membership.get("contactGroupMembership", {}).get("contactGroupResourceName") == group_resource:
-                            print(f"Removing membership for contact {email} from group '{group_label}' (not in current CSV).")
-                            modify_membership(service, group_resource, {"resourceNamesToRemove": [person.get("resourceName")]})
+    # Retrieve contacts once.
+    contacts_cache = get_all_contacts(service)
     
-    # Process each row from CSV for creating/updating contacts.
+    # Process each CSV row.
     for row in csv_rows:
         contact_email = row["E-mail 1 - Value"].strip().lower()
         group_label = row["Labels"].strip()
         
-        # Ensure the contact group exists.
-        if group_label not in group_name_to_resource:
-            group_body = {"contactGroup": {"name": group_label}}
-            group_resource = None
-            try:
+        # For target groups, create them fresh if needed.
+        if group_label in target_groups:
+            if group_label not in group_name_to_resource:
+                group_body = {"contactGroup": {"name": group_label}}
+                try:
+                    group_result = service.contactGroups().create(body=group_body).execute()
+                    group_resource = group_result.get('resourceName')
+                    group_name_to_resource[group_label] = group_resource
+                    print(f"Created contact group: {group_label} with resource {group_resource}")
+                    time.sleep(API_SLEEP)
+                except HttpError as e:
+                    if e.resp.status == 409:
+                        # The group already exists; retrieve it.
+                        groups_response = service.contactGroups().list().execute()
+                        for group in groups_response.get('contactGroups', []):
+                            if group.get('name') == group_label:
+                                group_resource = group.get('resourceName')
+                                group_name_to_resource[group_label] = group_resource
+                                print(f"Found existing contact group: {group_label} with resource {group_resource} (after conflict)")
+                                break
+                        else:
+                            raise e
+                    else:
+                        raise e
+            else:
+                group_resource = group_name_to_resource[group_label]
+        else:
+            # For non-target groups, create as needed.
+            if group_label not in group_name_to_resource:
+                group_body = {"contactGroup": {"name": group_label}}
                 group_result = service.contactGroups().create(body=group_body).execute()
                 group_resource = group_result.get('resourceName')
                 group_name_to_resource[group_label] = group_resource
                 print(f"Created contact group: {group_label} with resource {group_resource}")
-            except HttpError as e:
-                if e.resp.status == 409:
-                    groups_response = service.contactGroups().list().execute()
-                    for group in groups_response.get('contactGroups', []):
-                        if group.get('name') == group_label:
-                            group_resource = group.get('resourceName')
-                            group_name_to_resource[group_label] = group_resource
-                            print(f"Found existing contact group: {group_label} with resource {group_resource}")
-                            break
-                    if group_resource is None:
-                        raise e
-                else:
-                    raise e
-        else:
-            group_resource = group_name_to_resource[group_label]
-            
+                time.sleep(API_SLEEP)
+            else:
+                group_resource = group_name_to_resource[group_label]
+
+        # Check if the contact already exists.
         found_contact = contacts_cache.get(contact_email)
-        
         if found_contact:
             contact_resource = found_contact.get("resourceName")
-            # Instead of iterating over all memberships and removing them, simply check if the contact is in the desired group.
+            # Check if the contact is already a member of the target group.
             membership_found = any(
                 membership.get("contactGroupMembership", {}).get("contactGroupResourceName") == group_resource
                 for membership in found_contact.get("memberships", [])
             )
             if membership_found:
                 print(f"Contact {contact_email} already exists in group '{group_label}'. Skipping.")
-                continue
             else:
                 print(f"Contact {contact_email} exists but is not in group '{group_label}'. Adding to group.")
                 modify_membership(service, group_resource, {"resourceNamesToAdd": [contact_resource]})
                 print(f"Added contact {contact_email} to group '{group_label}'.")
         else:
+            # Create a new contact.
             contact_body = {
                 "names": [{
                     "givenName": row["First Name"].strip(),
@@ -179,12 +200,12 @@ def import_to_google_contacts_for_service(csv_path, service):
             result = service.people().createContact(body=contact_body).execute()
             contact_resource = result.get('resourceName')
             print(f"Created contact: {contact_resource}")
-            contacts_cache[contact_email] = result  # update cache
             modify_membership(service, group_resource, {"resourceNamesToAdd": [contact_resource]})
             print(f"Added contact {contact_resource} to group '{group_label}'.")
+            # Update the local contacts cache.
+            contacts_cache[contact_email] = result
         
-        # Small delay to help avoid rate limits.
-        time.sleep(0.2)
+        time.sleep(API_SLEEP)
 
 def import_to_google_contacts(csv_path):
     creds_account1 = get_credentials(
@@ -211,7 +232,7 @@ def process_mv_sheets(excel_path):
     try:
         mapping_df = pd.read_csv("data_map.txt", header=None, names=["Incorrect", "Correct"])
         mapping_dict = mapping_df.set_index("Incorrect")["Correct"].to_dict()
-    except Exception as e:
+    except Exception:
         mapping_dict = {}
     
     google_columns = [
