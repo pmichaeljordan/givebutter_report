@@ -230,11 +230,20 @@ def import_to_google_contacts(csv_path):
 
 def process_mv_sheets(excel_path):
     try:
-        mapping_df = pd.read_csv("data_map.txt", header=None, names=["Incorrect", "Correct"])
-        mapping_dict = mapping_df.set_index("Incorrect")["Correct"].to_dict()
-    except Exception:
+        # Read the mapping file with columns: Ticket Number, Incorrect, Correct.
+        mapping_df = pd.read_csv("data_map.txt", header=None, names=["Ticket Number", "Incorrect", "Correct"])
+        # Build a mapping dictionary keyed by the ticket number.
+        mapping_dict = {
+            str(row["Ticket Number"]).strip(): {
+                "Incorrect": str(row["Incorrect"]).strip(),
+                "Correct": str(row["Correct"]).strip()
+            }
+            for index, row in mapping_df.iterrows()
+        }
+    except Exception as e:
+        print("Error reading data_map.txt:", e)
         mapping_dict = {}
-    
+
     google_columns = [
         'Name Prefix', 'First Name', 'Middle Name', 'Last Name', 'Name Suffix',
         'Phonetic First Name', 'Phonetic Middle Name', 'Phonetic Last Name',
@@ -249,21 +258,35 @@ def process_mv_sheets(excel_path):
     ]
     
     xl = pd.ExcelFile(excel_path)
+    # Expect sheets whose names begin with 'MV'
     mv_sheets = [sheet for sheet in xl.sheet_names if sheet.startswith('MV')]
     all_rows = []
     
     for sheet in mv_sheets:
+        # Expect the Excel file to have a "Ticket Number" column as the first column
         df = xl.parse(sheet)
-        data = df[['First Name', 'Last Name', 'Email']].copy()
-        data['Phone'] = df['Phone'] if 'Phone' in df.columns else ''
+        # Limit the columns: Ticket Number, First Name, Last Name, Email.
+        data = df[['Ticket Number', 'First Name', 'Last Name', 'Email']].copy()
+        # Use "Phone" column if it exists.
+        if 'Phone' in df.columns:
+            data['Phone'] = df['Phone']
+        else:
+            data['Phone'] = ''
+        # Set the tag based on sheet name.
         data['Tag'] = '2025_Volunteer' if sheet == 'MV Volunteer' else '2025_Rider'
         
         for _, row in data.iterrows():
-            first_name = mapping_dict.get(row["First Name"], row["First Name"]).title()
-            last_name  = mapping_dict.get(row["Last Name"], row["Last Name"]).title()
-            email      = mapping_dict.get(row["Email"], row["Email"])
-            phone      = mapping_dict.get(row["Phone"], row["Phone"])
-            tag        = mapping_dict.get(row["Tag"], row["Tag"])
+            ticket_number = str(row["Ticket Number"]).strip()
+            first_name = str(row["First Name"]).strip().title()
+            last_name  = str(row["Last Name"]).strip().title()
+            orig_email = str(row["Email"]).strip()
+            # Replace email if ticket number is in mapping and the email matches the "Incorrect" value.
+            if ticket_number in mapping_dict and orig_email == mapping_dict[ticket_number]["Incorrect"]:
+                email = mapping_dict[ticket_number]["Correct"]
+            else:
+                email = orig_email
+            phone = str(row["Phone"]).strip()
+            tag = str(row["Tag"]).strip()
             
             contact = {col: "" for col in google_columns}
             contact["First Name"] = first_name

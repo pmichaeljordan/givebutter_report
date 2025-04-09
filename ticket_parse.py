@@ -52,6 +52,13 @@ def parse_tickets():
     data.columns = data.columns.str.strip().str.strip('"')
     print("Columns after cleaning:")
     print(data.columns.tolist())
+    
+    # Filter out revoked tickets if the column exists.
+    if 'Ticket Revoked' in data.columns:
+        initial_shape = data.shape
+        # Remove rows where Ticket Revoked is TRUE (case insensitive)
+        data = data[~(data["Ticket Revoked"].astype(str).str.upper() == "TRUE")]
+        print(f"Filtered revoked tickets: {initial_shape} -> {data.shape}")
 
     if 'Ticket Type' not in data.columns:
         raise ValueError("Could not find 'Ticket Type' in the CSV columns.")
