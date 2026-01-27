@@ -47,7 +47,7 @@ def get_credentials(scopes, token_file='drive_token.json', credentials_file='cre
 
 def get_campaign(auth_token):
     """
-    Function to list campaigns and allow the user to select one.
+    Function to list active campaigns and allow the user to select one.
     """
     url = "https://api.givebutter.com/v1/campaigns"
     response = requests.get(url, headers=headers)
@@ -60,25 +60,33 @@ def get_campaign(auth_token):
                 print("No campaign data found in response.")
                 return None
 
-            print("Available Campaigns:")
-            for index, campaign in enumerate(campaigns):
-                name = campaign.get("name", "No name")
+            # Filter for active campaigns only
+            active_campaigns = [c for c in campaigns if c.get("status") == "active"]
+            
+            if not active_campaigns:
+                print("No active campaigns found.")
+                return None
+
+            print("Active Campaigns:")
+            for index, campaign in enumerate(active_campaigns):
+                # Givebutter uses 'title' not 'name' for campaigns
+                title = campaign.get("title", "Untitled")
                 camp_id = campaign.get("id", "N/A")
-                print(f"{index + 1}. {name} (ID: {camp_id})")
+                print(f"{index + 1}. {title} (ID: {camp_id})")
 
             selected = input("Enter the number of the campaign you want to use: ")
             try:
                 selected_index = int(selected) - 1
-                if 0 <= selected_index < len(campaigns):
-                    campaign_id = campaigns[selected_index]["id"]
+                if 0 <= selected_index < len(active_campaigns):
+                    campaign_id = active_campaigns[selected_index]["id"]
                     print("Selected Campaign ID:", campaign_id)
                     return campaign_id
                 else:
                     print("Invalid selection. Defaulting to the first campaign.")
-                    return campaigns[0]["id"]
+                    return active_campaigns[0]["id"]
             except ValueError:
                 print("Invalid input. Defaulting to the first campaign.")
-                return campaigns[0]["id"]
+                return active_campaigns[0]["id"]
         except json.JSONDecodeError:
             print("Error parsing response as JSON. Response text:", response.text)
     else:
@@ -246,14 +254,23 @@ def fundraising(df2: pd.DataFrame, base_file_name: str = "Fundraising_Progress")
     # Rename the merged ticket title column to 'Title'
     df2 = df2.rename(columns={"title": "Title"})
     
-    # Define a mapping for the long title strings to shortened versions
-    title_mapping = {
-        "2025 Ride for Missing Children - MV New / Returning High School Student Riders": "High School Riders",
-        "2025 Ride for Missing Children - MV New / Returning Riders": "New/Returning",
-        "2025 Ride for Missing Children - MV Volunteer": "Volunteer",
-        "2025 Ride for Missing Children - MV Corporate Riders": "Corporate Riders",
-        "2025 Ride for Missing Children - MV Reciprocal Riders": "Reciprocal Riders"
+    # Define a mapping for ticket type suffixes to shortened display names
+    # The year prefix is added dynamically so this works for any year
+    ticket_type_mapping = {
+        "New / Returning High School Student Riders": "High School Riders",
+        "New / Returning Riders": "New/Returning",
+        "Volunteer": "Volunteer",
+        "Corporate Riders": "Corporate Riders",
+        "Reciprocal Riders": "Reciprocal Riders"
     }
+
+    # Build the full title mapping dynamically using the current year
+    title_prefix = f"{current_year_str} Ride for Missing Children - MV "
+    title_mapping = {
+        f"{title_prefix}{suffix}": short_name
+        for suffix, short_name in ticket_type_mapping.items()
+    }
+
     # Apply the mapping: if a title matches one of the keys, it will be replaced; otherwise, it remains unchanged.
     df2["Title"] = df2["Title"].map(title_mapping).fillna(df2["Title"])
 

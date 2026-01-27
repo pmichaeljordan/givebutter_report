@@ -16,6 +16,7 @@ import pandas as pd
 import os
 import glob
 import time
+import datetime
 
 def auto_adjust_columns_width(df, writer, sheet_name):
     """Auto-adjust column widths for an Excel sheet."""
@@ -52,16 +53,54 @@ def save_and_compare_df(df, description, output_dir):
     else:
         print(f"No previous files found for {description}. Current file saved as {filename}.")
 
-def main():
-    # Load the transactions CSV and strip whitespace from column names
+def check_transactions_file():
+    """
+    Check if transactions.csv exists and is recent.
+    Returns the file path if it should be used, None otherwise.
+    """
     file_path = 'transactions.csv'
+
+    # Check if file exists
+    if not os.path.exists(file_path):
+        print("ERROR: transactions.csv not found in the current directory.")
+        print("Please export the transactions CSV from Givebutter and place it in this directory.")
+        return None
+
+    # Check file modification time
+    file_mod_time = os.path.getmtime(file_path)
+    file_age_days = (time.time() - file_mod_time) / (24 * 3600)
+    file_mod_date = datetime.datetime.fromtimestamp(file_mod_time).strftime('%Y-%m-%d %H:%M:%S')
+
+    if file_age_days > 7:
+        print(f"WARNING: transactions.csv was last modified on {file_mod_date}")
+        print(f"This file is {file_age_days:.1f} days old.")
+        response = input("Do you want to proceed with this older file? (yes/no): ").strip().lower()
+        if response not in ['yes', 'y']:
+            print("Please export a fresh transactions.csv from Givebutter and try again.")
+            return None
+    else:
+        print(f"Found transactions.csv (last modified: {file_mod_date})")
+
+    return file_path
+
+def main():
+    # Check for transactions.csv file
+    file_path = check_transactions_file()
+    if file_path is None:
+        return
+
+    # Get current year for dynamic campaign matching
+    current_year = str(datetime.datetime.now().year)
+
+    # Load the transactions CSV and strip whitespace from column names
     df = pd.read_csv(file_path)
     df.columns = df.columns.str.strip()
 
     # Correct campaign description if needed in the 'Item Description' column.
+    # Uses dynamic year so it works for any year
     df['Item Description'] = df['Item Description'].replace(
-        '2025 Ride for Missing Children - MV New and Returning Riders',
-        '2025 Ride for Missing Children - MV New / Returning Riders'
+        f'{current_year} Ride for Missing Children - MV New and Returning Riders',
+        f'{current_year} Ride for Missing Children - MV New / Returning Riders'
     )
     
     # Filter rows where 'Item Subtype' is 'ticket'
@@ -121,11 +160,13 @@ def main():
     ]
     tickets_df.drop(columns=drop_columns, errors='ignore', inplace=True)
     
-    # Mapping of campaign descriptions (from 'Item Description') to sheet names
+    # Mapping of campaign description suffixes to sheet names
+    # Built dynamically using current year
+    campaign_prefix = f'{current_year} Ride for Missing Children - MV '
     description_to_sheet_map = {
-        '2025 Ride for Missing Children - MV New / Returning Riders': 'NewAndReturning',
-        '2025 Ride for Missing Children - MV Reciprocal Riders': 'Reciprocal',
-        '2025 Ride for Missing Children - MV Volunteer': 'Volunteer'
+        f'{campaign_prefix}New / Returning Riders': 'NewAndReturning',
+        f'{campaign_prefix}Reciprocal Riders': 'Reciprocal',
+        f'{campaign_prefix}Volunteer': 'Volunteer'
     }
     
     # Ensure output directory exists

@@ -16,9 +16,25 @@ def parse_tickets():
 
     try:
         file_path = find_latest_csv(prefix='tickets-', directory='.')
+
+        # Check file age and warn if old
+        file_mod_time = os.path.getmtime(file_path)
+        file_age_days = (datetime.now().timestamp() - file_mod_time) / (24 * 3600)
+        file_mod_date = datetime.fromtimestamp(file_mod_time).strftime('%Y-%m-%d %H:%M:%S')
+
         print(f"Processing file: {file_path}")
+        print(f"Last modified: {file_mod_date}")
+
+        if file_age_days > 7:
+            print(f"WARNING: This file is {file_age_days:.1f} days old.")
+            response = input("Do you want to proceed with this file? (yes/no): ").strip().lower()
+            if response not in ['yes', 'y']:
+                print("Please export a fresh tickets CSV from Givebutter and try again.")
+                return None
+
     except FileNotFoundError as e:
         print(str(e))
+        print("Please export the tickets CSV from Givebutter and place it in this directory.")
         return None
 
     # Read the CSV with specific parameters
@@ -88,12 +104,21 @@ def parse_tickets():
             max_len = max(ticket_data[col].astype(str).map(len).max(), len(col)) + 2
             worksheet.set_column(i, i, max_len)
 
-    # Create a T-shirt Sizes sheet
-    tshirt_data = data[['T-shirt sizing (Unisex)', 'First Name', 'Last Name', 'Email']]
-    tshirt_summary = tshirt_data['T-shirt sizing (Unisex)'].value_counts().reset_index()
-    tshirt_summary.columns = ['T-Shirt Size', 'Count']
-    tshirt_data.to_excel(writer, sheet_name='T-Shirt Sizes', index=False, startrow=0)
-    tshirt_summary.to_excel(writer, sheet_name='T-Shirt Sizes', index=False, startrow=len(tshirt_data) + 2)
+    # Create a T-shirt Sizes sheet if the column exists
+    if 'T-shirt sizing (Unisex)' in data.columns:
+        tshirt_columns = ['T-shirt sizing (Unisex)', 'First Name', 'Last Name', 'Email']
+        # Only include columns that exist
+        available_tshirt_cols = [col for col in tshirt_columns if col in data.columns]
+
+        if available_tshirt_cols:
+            tshirt_data = data[available_tshirt_cols]
+            tshirt_summary = tshirt_data['T-shirt sizing (Unisex)'].value_counts().reset_index()
+            tshirt_summary.columns = ['T-Shirt Size', 'Count']
+            tshirt_data.to_excel(writer, sheet_name='T-Shirt Sizes', index=False, startrow=0)
+            tshirt_summary.to_excel(writer, sheet_name='T-Shirt Sizes', index=False, startrow=len(tshirt_data) + 2)
+            print("T-Shirt Sizes sheet created")
+    else:
+        print("T-shirt sizing column not found, skipping T-Shirt Sizes sheet")
 
     writer.close()
     print(f"Workbook saved to {output_path}")

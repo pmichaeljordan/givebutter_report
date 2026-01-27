@@ -93,7 +93,9 @@ def import_to_google_contacts_for_service(csv_path, service):
     Since the target labels are deleted at the start, the groups are re-created solely based on the CSV.
     """
     # Define the target groups (labels) that will be managed.
-    target_groups = ["2025_Rider", "2025_Volunteer"]
+    # Use current year to make this future-proof
+    current_year = str(datetime.now().year)
+    target_groups = [f"{current_year}_Rider", f"{current_year}_Volunteer", f"{current_year}_New_Riders"]
     
     # Retrieve existing contact groups.
     groups_response = service.contactGroups().list().execute()
@@ -128,61 +130,60 @@ def import_to_google_contacts_for_service(csv_path, service):
     # Process each CSV row.
     for row in csv_rows:
         contact_email = row["E-mail 1 - Value"].strip().lower()
-        group_label = row["Labels"].strip()
-        
-        # For target groups, create them fresh if needed.
-        if group_label in target_groups:
-            if group_label not in group_name_to_resource:
-                group_body = {"contactGroup": {"name": group_label}}
-                try:
+        # Handle multiple labels separated by ' ::: '
+        labels_str = row["Labels"].strip()
+        group_labels = [label.strip() for label in labels_str.split(' ::: ') if label.strip()]
+
+        # Ensure all groups exist first
+        group_resources = []
+        for group_label in group_labels:
+            # For target groups, create them fresh if needed.
+            if group_label in target_groups:
+                if group_label not in group_name_to_resource:
+                    group_body = {"contactGroup": {"name": group_label}}
+                    try:
+                        group_result = service.contactGroups().create(body=group_body).execute()
+                        group_resource = group_result.get('resourceName')
+                        group_name_to_resource[group_label] = group_resource
+                        print(f"Created contact group: {group_label} with resource {group_resource}")
+                        time.sleep(API_SLEEP)
+                    except HttpError as e:
+                        if e.resp.status == 409:
+                            # The group already exists; retrieve it.
+                            groups_response = service.contactGroups().list().execute()
+                            for group in groups_response.get('contactGroups', []):
+                                if group.get('name') == group_label:
+                                    group_resource = group.get('resourceName')
+                                    group_name_to_resource[group_label] = group_resource
+                                    print(f"Found existing contact group: {group_label} with resource {group_resource} (after conflict)")
+                                    break
+                            else:
+                                raise e
+                        else:
+                            raise e
+                else:
+                    group_resource = group_name_to_resource[group_label]
+            else:
+                # For non-target groups, create as needed.
+                if group_label not in group_name_to_resource:
+                    group_body = {"contactGroup": {"name": group_label}}
                     group_result = service.contactGroups().create(body=group_body).execute()
                     group_resource = group_result.get('resourceName')
                     group_name_to_resource[group_label] = group_resource
                     print(f"Created contact group: {group_label} with resource {group_resource}")
                     time.sleep(API_SLEEP)
-                except HttpError as e:
-                    if e.resp.status == 409:
-                        # The group already exists; retrieve it.
-                        groups_response = service.contactGroups().list().execute()
-                        for group in groups_response.get('contactGroups', []):
-                            if group.get('name') == group_label:
-                                group_resource = group.get('resourceName')
-                                group_name_to_resource[group_label] = group_resource
-                                print(f"Found existing contact group: {group_label} with resource {group_resource} (after conflict)")
-                                break
-                        else:
-                            raise e
-                    else:
-                        raise e
-            else:
-                group_resource = group_name_to_resource[group_label]
-        else:
-            # For non-target groups, create as needed.
-            if group_label not in group_name_to_resource:
-                group_body = {"contactGroup": {"name": group_label}}
-                group_result = service.contactGroups().create(body=group_body).execute()
-                group_resource = group_result.get('resourceName')
-                group_name_to_resource[group_label] = group_resource
-                print(f"Created contact group: {group_label} with resource {group_resource}")
-                time.sleep(API_SLEEP)
-            else:
-                group_resource = group_name_to_resource[group_label]
+                else:
+                    group_resource = group_name_to_resource[group_label]
+
+            group_resources.append((group_label, group_resource))
 
         # Check if the contact already exists.
         found_contact = contacts_cache.get(contact_email)
+        contact_resource = None
+
         if found_contact:
             contact_resource = found_contact.get("resourceName")
-            # Check if the contact is already a member of the target group.
-            membership_found = any(
-                membership.get("contactGroupMembership", {}).get("contactGroupResourceName") == group_resource
-                for membership in found_contact.get("memberships", [])
-            )
-            if membership_found:
-                print(f"Contact {contact_email} already exists in group '{group_label}'. Skipping.")
-            else:
-                print(f"Contact {contact_email} exists but is not in group '{group_label}'. Adding to group.")
-                modify_membership(service, group_resource, {"resourceNamesToAdd": [contact_resource]})
-                print(f"Added contact {contact_email} to group '{group_label}'.")
+            print(f"Contact {contact_email} already exists.")
         else:
             # Create a new contact.
             contact_body = {
@@ -200,11 +201,24 @@ def import_to_google_contacts_for_service(csv_path, service):
             result = service.people().createContact(body=contact_body).execute()
             contact_resource = result.get('resourceName')
             print(f"Created contact: {contact_resource}")
-            modify_membership(service, group_resource, {"resourceNamesToAdd": [contact_resource]})
-            print(f"Added contact {contact_resource} to group '{group_label}'.")
             # Update the local contacts cache.
             contacts_cache[contact_email] = result
-        
+            found_contact = result
+
+        # Add contact to each group
+        for group_label, group_resource in group_resources:
+            # Check if the contact is already a member of this group.
+            membership_found = any(
+                membership.get("contactGroupMembership", {}).get("contactGroupResourceName") == group_resource
+                for membership in found_contact.get("memberships", [])
+            )
+            if membership_found:
+                print(f"Contact {contact_email} already in group '{group_label}'. Skipping.")
+            else:
+                print(f"Adding contact {contact_email} to group '{group_label}'.")
+                modify_membership(service, group_resource, {"resourceNamesToAdd": [contact_resource]})
+                print(f"Added contact {contact_email} to group '{group_label}'.")
+
         time.sleep(API_SLEEP)
 
 def import_to_google_contacts(csv_path):
@@ -229,6 +243,9 @@ def import_to_google_contacts(csv_path):
     import_to_google_contacts_for_service(csv_path, service_account2)
 
 def process_mv_sheets(excel_path):
+    # Get current year for dynamic tag generation
+    current_year = str(datetime.now().year)
+
     try:
         # Read the mapping file with columns: Ticket Number, Incorrect, Correct.
         mapping_df = pd.read_csv("data_map.txt", header=None, names=["Ticket Number", "Incorrect", "Correct"])
@@ -256,7 +273,7 @@ def process_mv_sheets(excel_path):
         'Website 1 - Label', 'Website 1 - Value', 'Custom Field 1 - Label',
         'Custom Field 1 - Value', 'Notes', 'Labels'
     ]
-    
+
     xl = pd.ExcelFile(excel_path)
     # Expect sheets whose names begin with 'MV'
     mv_sheets = [sheet for sheet in xl.sheet_names if sheet.startswith('MV')]
@@ -266,14 +283,37 @@ def process_mv_sheets(excel_path):
         # Expect the Excel file to have a "Ticket Number" column as the first column
         df = xl.parse(sheet)
         # Limit the columns: Ticket Number, First Name, Last Name, Email.
-        data = df[['Ticket Number', 'First Name', 'Last Name', 'Email']].copy()
+        required_cols = ['Ticket Number', 'First Name', 'Last Name', 'Email']
+        data = df[required_cols].copy()
+
         # Use "Phone" column if it exists.
         if 'Phone' in df.columns:
             data['Phone'] = df['Phone']
         else:
             data['Phone'] = ''
-        # Set the tag based on sheet name.
-        data['Tag'] = '2025_Volunteer' if sheet == 'MV Volunteer' else '2025_Rider'
+
+        # Check for "Are you a new or returning rider?" column for new rider detection
+        # The column name may have a suffix like "(Ride for Missing Children...)"
+        new_rider_cols = [col for col in df.columns if col.startswith('Are you a new or returning rider?')]
+        if new_rider_cols:
+            new_rider_col = new_rider_cols[0]
+            data['New_Rider_Status'] = df[new_rider_col]
+            print(f"Found new rider column: {new_rider_col}")
+        else:
+            data['New_Rider_Status'] = ''
+            print(f"No new rider column found in sheet {sheet}")
+
+        # Set the tag based on sheet name (uses current year dynamically)
+        if sheet == 'MV Volunteer':
+            data['Tag'] = f'{current_year}_Volunteer'
+        else:
+            # This is a rider sheet - check if they are new riders
+            data['Tag'] = data.apply(
+                lambda row: f'{current_year}_Rider ::: {current_year}_New_Riders'
+                if str(row.get('New_Rider_Status', '')).strip().lower() in ['new rider', 'new']
+                else f'{current_year}_Rider',
+                axis=1
+            )
         
         for _, row in data.iterrows():
             ticket_number = str(row["Ticket Number"]).strip()
