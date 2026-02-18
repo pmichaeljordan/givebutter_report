@@ -104,15 +104,15 @@ def parse_tickets():
             max_len = max(ticket_data[col].astype(str).map(len).max(), len(col)) + 2
             worksheet.set_column(i, i, max_len)
 
-    # Create a T-shirt Sizes sheet if the column exists
-    if 'T-shirt sizing (Unisex)' in data.columns:
-        tshirt_columns = ['T-shirt sizing (Unisex)', 'First Name', 'Last Name', 'Email']
-        # Only include columns that exist
+    # Create a T-shirt Sizes sheet if the column exists (match prefix to handle event-suffixed column names)
+    tshirt_col = next((c for c in data.columns if c.startswith('T-shirt sizing (Unisex)')), None)
+    if tshirt_col:
+        tshirt_columns = [tshirt_col, 'First Name', 'Last Name', 'Email']
         available_tshirt_cols = [col for col in tshirt_columns if col in data.columns]
 
         if available_tshirt_cols:
             tshirt_data = data[available_tshirt_cols]
-            tshirt_summary = tshirt_data['T-shirt sizing (Unisex)'].value_counts().reset_index()
+            tshirt_summary = tshirt_data[tshirt_col].value_counts().reset_index()
             tshirt_summary.columns = ['T-Shirt Size', 'Count']
             tshirt_data.to_excel(writer, sheet_name='T-Shirt Sizes', index=False, startrow=0)
             tshirt_summary.to_excel(writer, sheet_name='T-Shirt Sizes', index=False, startrow=len(tshirt_data) + 2)
