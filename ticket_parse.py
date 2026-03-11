@@ -82,9 +82,60 @@ def parse_tickets():
     ticket_types = data['Ticket Type'].unique()
     print("Unique ticket types:", ticket_types)
 
+    # Build registration summary counts for the pie chart
+    # There are duplicate "Are you a new or returning rider?" columns (pandas appends .1, .2...)
+    # Regular riders use the first occurrence; High School riders use .1 — coalesce both.
+    nr_cols = [c for c in data.columns if c.startswith('Are you a new or returning rider?')]
+    if nr_cols:
+        new_ret_combined = data[nr_cols].bfill(axis=1).iloc[:, 0]
+    else:
+        new_ret_combined = pd.Series('', index=data.index)
+
+    volunteer_mask   = data['Ticket Type'].str.contains('Volunteer',   case=False, na=False)
+    reciprocal_mask  = data['Ticket Type'].str.contains('Reciprocal',  case=False, na=False)
+    high_school_mask = data['Ticket Type'].str.contains('High School', case=False, na=False)
+    regular_mask     = ~volunteer_mask & ~reciprocal_mask & ~high_school_mask
+
+    new_mask      = new_ret_combined.str.contains('New',       case=False, na=False)
+    returning_mask = new_ret_combined.str.contains('Returning', case=False, na=False)
+
+    counts = {
+        'New Riders':            int((regular_mask & new_mask).sum()),
+        'Returning Riders':      int((regular_mask & returning_mask).sum()),
+        'Reciprocal':            int(reciprocal_mask.sum()),
+        'High School New':       int((high_school_mask & new_mask).sum()),
+        'High School Returning': int((high_school_mask & returning_mask).sum()),
+        'Volunteer':             int(volunteer_mask.sum()),
+    }
+    total_riders = sum(v for k, v in counts.items() if k != 'Volunteer')
+    summary_counts = list(counts.items())
+    summary_df = pd.DataFrame(summary_counts, columns=['Category', 'Count'])
+
     date_str = datetime.now().strftime("%m-%d-%Y")
     output_path = f"./parsed_tickets_{date_str}.xlsx"
     writer = pd.ExcelWriter(output_path, engine='xlsxwriter')
+
+    # Write Summary sheet first so it appears as the first tab
+    summary_df.to_excel(writer, sheet_name='Summary', index=False)
+    workbook = writer.book
+    summary_ws = writer.sheets['Summary']
+    summary_ws.set_column(0, 0, 22)
+    summary_ws.set_column(1, 1, 8)
+
+    chart = workbook.add_chart({'type': 'pie'})
+    chart.add_series({
+        'name':       'Registrations',
+        'categories': ['Summary', 1, 0, len(summary_df), 0],
+        'values':     ['Summary', 1, 1, len(summary_df), 1],
+        'data_labels': {'percentage': True, 'category': True, 'separator': '\n'},
+    })
+    summary_ws.write(len(summary_df) + 2, 0, 'Total Riders (excl. Volunteers)')
+    summary_ws.write(len(summary_df) + 2, 1, total_riders)
+
+    chart.set_title({'name': f'Registration Breakdown by Type ({total_riders} total riders)'})
+    chart.set_style(10)
+    summary_ws.insert_chart('D2', chart, {'x_scale': 1.8, 'y_scale': 1.8})
+    print("Summary sheet with pie chart created")
 
     def clean_sheet_name(ticket_type):
         parts = ticket_type.split(' - ', 1)
