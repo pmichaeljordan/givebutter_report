@@ -173,6 +173,19 @@ def parse_tickets():
     else:
         print("T-shirt sizing column not found, skipping T-Shirt Sizes sheet")
 
+    # Add Test Email and Supplemental sheets from CSV files if they exist
+    for csv_file, sheet_name in [('test_email.csv', 'Test Email'), ('supplemental.csv', 'Supplemental')]:
+        if os.path.exists(csv_file):
+            csv_data = pd.read_csv(csv_file, encoding='utf-8-sig')
+            csv_data.to_excel(writer, sheet_name=sheet_name, index=False)
+            worksheet = writer.sheets[sheet_name]
+            for i, col in enumerate(csv_data.columns):
+                max_len = max(csv_data[col].astype(str).map(len).max(), len(col)) + 2
+                worksheet.set_column(i, i, max_len)
+            print(f"'{sheet_name}' sheet created from {csv_file}")
+        else:
+            print(f"WARNING: {csv_file} not found, skipping '{sheet_name}' sheet")
+
     writer.close()
     print(f"Workbook saved to {output_path}")
 
