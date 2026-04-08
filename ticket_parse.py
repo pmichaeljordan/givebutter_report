@@ -94,7 +94,8 @@ def parse_tickets():
     volunteer_mask   = data['Ticket Type'].str.contains('Volunteer',   case=False, na=False)
     reciprocal_mask  = data['Ticket Type'].str.contains('Reciprocal',  case=False, na=False)
     high_school_mask = data['Ticket Type'].str.contains('High School', case=False, na=False)
-    regular_mask     = ~volunteer_mask & ~reciprocal_mask & ~high_school_mask
+    corporate_mask   = data['Ticket Type'].str.contains('Corporate',   case=False, na=False)
+    regular_mask     = ~volunteer_mask & ~reciprocal_mask & ~high_school_mask & ~corporate_mask
 
     new_mask      = new_ret_combined.str.contains('New',       case=False, na=False)
     returning_mask = new_ret_combined.str.contains('Returning', case=False, na=False)
@@ -105,6 +106,7 @@ def parse_tickets():
         'Reciprocal':            int(reciprocal_mask.sum()),
         'High School New':       int((high_school_mask & new_mask).sum()),
         'High School Returning': int((high_school_mask & returning_mask).sum()),
+        'Corporate':             int(corporate_mask.sum()),
         'Volunteer':             int(volunteer_mask.sum()),
     }
     total_riders = sum(v for k, v in counts.items() if k != 'Volunteer')

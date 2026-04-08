@@ -55,16 +55,16 @@ def save_and_compare_df(df, description, output_dir):
 
 def check_transactions_file():
     """
-    Check if transactions.csv exists and is recent.
+    Find the latest transactions-*.csv file in the current directory.
     Returns the file path if it should be used, None otherwise.
     """
-    file_path = 'transactions.csv'
-
-    # Check if file exists
-    if not os.path.exists(file_path):
-        print("ERROR: transactions.csv not found in the current directory.")
+    files = glob.glob('transactions-*.csv')
+    if not files:
+        print("ERROR: No transactions CSV file found in the current directory.")
         print("Please export the transactions CSV from Givebutter and place it in this directory.")
         return None
+
+    file_path = max(files, key=os.path.getmtime)
 
     # Check file modification time
     file_mod_time = os.path.getmtime(file_path)
@@ -72,14 +72,14 @@ def check_transactions_file():
     file_mod_date = datetime.datetime.fromtimestamp(file_mod_time).strftime('%Y-%m-%d %H:%M:%S')
 
     if file_age_days > 7:
-        print(f"WARNING: transactions.csv was last modified on {file_mod_date}")
+        print(f"WARNING: {file_path} was last modified on {file_mod_date}")
         print(f"This file is {file_age_days:.1f} days old.")
         response = input("Do you want to proceed with this older file? (yes/no): ").strip().lower()
         if response not in ['yes', 'y']:
-            print("Please export a fresh transactions.csv from Givebutter and try again.")
+            print("Please export a fresh transactions CSV from Givebutter and try again.")
             return None
     else:
-        print(f"Found transactions.csv (last modified: {file_mod_date})")
+        print(f"Found {file_path} (last modified: {file_mod_date})")
 
     return file_path
 
